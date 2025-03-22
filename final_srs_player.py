@@ -39,6 +39,9 @@ except ImportError:
     from aiortc.contrib.media import MediaPlayer, MediaRecorder, MediaBlackhole
     import av
 
+# 全局变量，用于控制程序退出
+exit_program = False
+
 class VideoFrameProcessor(MediaStreamTrack):
     """处理视频帧的媒体流轨道"""
     
@@ -59,8 +62,18 @@ class VideoFrameProcessor(MediaStreamTrack):
         if self.display:
             cv2.namedWindow(self.window_name, cv2.WINDOW_NORMAL)
             cv2.resizeWindow(self.window_name, 960, 540)
+            # 设置窗口关闭回调
+            cv2.setWindowProperty(self.window_name, cv2.WND_PROP_TOPMOST, 1)
     
     async def recv(self):
+        global exit_program
+        
+        # 如果窗口已关闭或程序需要退出，结束轨道
+        if exit_program or (self.display and not self._is_window_open()):
+            exit_program = True
+            self.stop()
+            raise MediaStreamTrack.ended()
+        
         frame = await self.track.recv()
         self.frame_count += 1
         
@@ -74,26 +87,27 @@ class VideoFrameProcessor(MediaStreamTrack):
             logger.info(f"视频分辨率: {self.frame_size[0]}x{self.frame_size[1]}")
         
         # 显示视频帧
-        if self.display:
-            # 将PyAV帧转换为OpenCV图像
-            img = frame.to_ndarray(format="bgr24")
-            
-            # 显示图像
-            cv2.imshow(self.window_name, img)
-            
-            # 检测按键，如果按下ESC键则退出
-            key = cv2.waitKey(1) & 0xFF
-            if key == 27:  # ESC键
-                self.display = False
-                cv2.destroyAllWindows()
+        if self.display and not exit_program:
+            try:
+                # 将PyAV帧转换为OpenCV图像
+                img = frame.to_ndarray(format="bgr24")
                 
-                # 触发信号通知主程序退出
-                if sys.platform != "win32":
-                    os.kill(os.getpid(), signal.SIGINT)
-                else:
-                    # Windows不支持SIGINT信号，使用特定方法结束程序
-                    # 在这里我们可以设置一个标志，然后在主循环中检测它
-                    pass
+                # 显示图像
+                cv2.imshow(self.window_name, img)
+                
+                # 检测按键，如果按下ESC键则退出
+                key = cv2.waitKey(1) & 0xFF
+                if key == 27:  # ESC键
+                    logger.info("用户按下ESC键，准备退出...")
+                    exit_program = True
+                    self.stop()
+                    self._trigger_program_exit()
+            except cv2.error as e:
+                logger.warning(f"OpenCV错误: {e}")
+                if "无法识别的错误" in str(e) or "无效的窗口" in str(e):
+                    exit_program = True
+                    self.stop()
+                    self._trigger_program_exit()
         
         # 每秒记录一次帧率
         current_time = time.time()
@@ -106,10 +120,46 @@ class VideoFrameProcessor(MediaStreamTrack):
         
         return frame
     
+    def _is_window_open(self):
+        """检查窗口是否仍然打开"""
+        try:
+            if self.window_name:
+                # 尝试获取窗口属性，如果窗口已关闭会抛出异常
+                prop = cv2.getWindowProperty(self.window_name, cv2.WND_PROP_VISIBLE)
+                return prop >= 0
+        except cv2.error:
+            return False
+        return True
+    
+    def _trigger_program_exit(self):
+        """触发程序退出"""
+        global exit_program
+        exit_program = True
+        logger.info("窗口已关闭，准备退出程序...")
+        # 使用asyncio的方式通知主循环退出
+        asyncio.get_event_loop().call_soon_threadsafe(
+            lambda: asyncio.create_task(self._exit_soon())
+        )
+    
+    async def _exit_soon(self):
+        """异步退出函数"""
+        # 等待短暂时间让其他操作完成
+        await asyncio.sleep(0.5)
+        # 发送退出信号
+        if sys.platform != "win32":
+            os.kill(os.getpid(), signal.SIGINT)
+        else:
+            # Windows下使用其他方式退出
+            # 全局变量已经设置为True，主循环会检查它
+            pass
+    
     def stop(self):
         """停止处理器并关闭任何窗口"""
         if self.window_name and self.display:
-            cv2.destroyAllWindows()
+            try:
+                cv2.destroyWindow(self.window_name)
+            except:
+                pass
 
 class SRSWebRTCClient:
     def __init__(self, api_url=None, ice_servers=None, timeout=30):
@@ -412,6 +462,8 @@ class SRSWebRTCClient:
 
 async def run_webrtc_client(webpage_url, stream_url=None, display=False, record=False, output_file=None, timeout=60):
     """运行WebRTC客户端"""
+    global exit_program
+    
     # 创建SRS WebRTC客户端
     client = SRSWebRTCClient(timeout=timeout)
     
@@ -432,12 +484,19 @@ async def run_webrtc_client(webpage_url, stream_url=None, display=False, record=
         # 等待指定的时间或直到程序被中断
         if timeout > 0:
             logger.info(f"将保持连接 {timeout} 秒...")
-            await asyncio.sleep(timeout)
+            
+            # 使用更小的时间间隔检查退出标志
+            start_time = time.time()
+            while time.time() - start_time < timeout and not exit_program:
+                await asyncio.sleep(0.5)
+                
+            if exit_program:
+                logger.info("检测到退出标志，正在关闭...")
         else:
-            # 无限期运行，直到按下Ctrl+C
-            logger.info(f"连接已建立，按Ctrl+C中断...")
-            while True:
-                await asyncio.sleep(1)
+            # 无限期运行，直到按下Ctrl+C或窗口关闭
+            logger.info(f"连接已建立，按Ctrl+C或关闭窗口中断...")
+            while not exit_program:
+                await asyncio.sleep(0.5)
         
     except KeyboardInterrupt:
         logger.info("用户中断，正在关闭连接...")
@@ -447,9 +506,17 @@ async def run_webrtc_client(webpage_url, stream_url=None, display=False, record=
         # 关闭连接
         await client.close()
         
+        # 确保所有OpenCV窗口都关闭
+        try:
+            cv2.destroyAllWindows()
+        except:
+            pass
+        
     return True
 
 async def main():
+    global exit_program
+    
     # 解析命令行参数
     parser = argparse.ArgumentParser(description="SRS WebRTC流播放器")
     parser.add_argument("url", help="WebRTC播放页面的URL或直接的API URL")
@@ -475,11 +542,21 @@ async def main():
         output_file=args.output if args.record else None,
         timeout=args.timeout
     )
+    
+    # 程序结束提示
+    logger.info("程序已正常退出")
 
 if __name__ == "__main__":
     # 为Windows设置事件循环策略
     if sys.platform == 'win32':
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     
-    # 运行主函数
-    asyncio.run(main())
+    try:
+        # 运行主函数
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("用户通过Ctrl+C中断程序")
+    finally:
+        # 确保OpenCV窗口在程序结束时关闭
+        cv2.destroyAllWindows()
+        sys.exit(0)  # 强制退出程序
