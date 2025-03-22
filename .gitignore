@@ -1,0 +1,95 @@
+# Python字节码文件
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C扩展
+*.so
+
+# 发行版/打包
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# PyInstaller
+*.manifest
+*.spec
+
+# 单元测试/覆盖率报告
+htmlcov/
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# 环境
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+Scripts/
+Lib/
+pyvenv.cfg
+
+# IDE相关
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# 项目特定
+# 包含下载的外部JavaScript文件，不需要版本控制
+downloaded_js/
+*.log
+
+# 视频文件
+*.mp4
+*.avi
+*.mkv
+*.mov
+
+# 项目中的临时或旧版本文件
+# 只保留final_srs_player.py作为最终版本
+srs_video_player.py
+srs_player*.py
+fixed_*.py
+*_player_fixed.py
+simple_*.py
+minimal_*.py
+webrtc_*.py
+advanced_*.py
+console_*.py
+
+# 临时目录
+__temp__/
+temp/
+
+# 其他可能生成的文件
+*.bak
+*.tmp
+.pytest_cache/
+.mypy_cache/
